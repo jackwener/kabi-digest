@@ -22,8 +22,15 @@ const DEFAULTS: AppConfig = {
         nodes: ["hot"],
         excludeNodes: ["promotions", "deals", "cv", "exchange"],
         topN: 20,
+        pages: 3,
     },
     skipHours: 72,
+    extractor: {
+        enabled: true,
+        concurrency: 3,
+        maxLength: 5000,
+        timeout: 15000,
+    },
 };
 
 function snakeToCamel(obj: unknown): unknown {

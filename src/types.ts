@@ -43,8 +43,15 @@ export interface AppConfig {
         nodes: string[];
         excludeNodes: string[];
         topN: number;
+        pages: number;
     };
     skipHours: number;
+    extractor: {
+        enabled: boolean;
+        concurrency: number;
+        maxLength: number;
+        timeout: number;
+    };
 }
 
 // ── HN API raw types ──

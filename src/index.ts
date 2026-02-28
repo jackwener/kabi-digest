@@ -9,6 +9,7 @@ import { scoreAndRank } from "./scorer";
 import { Summarizer } from "./summarizer";
 import { renderMarkdown } from "./renderer";
 import { Storage } from "./storage";
+import { extractBatch } from "./extractor";
 import type { NewsItem, SummarizedItem } from "./types";
 
 function getToday(): string {
@@ -74,11 +75,12 @@ async function runGenerate(opts: any) {
 
     if (config.v2ex.enabled && !opts.hnOnly) {
         const topN = opts.topN ?? config.v2ex.topN;
-        console.log(`🟢 V2EX (top-n: ${topN})`);
+        const pages = config.v2ex.pages;
+        console.log(`🟢 V2EX (top-n: ${topN}, pages: ${pages})`);
         for (const node of config.v2ex.nodes) {
             process.stdout.write(`   Fetching ${node}...`);
             try {
-                const items = await fetchV2EX(node, config.v2ex.token);
+                const items = await fetchV2EX(node, config.v2ex.token, pages);
                 v2exItems.push(...items);
                 console.log(` ${items.length} topics`);
             } catch (err) {
@@ -87,17 +89,22 @@ async function runGenerate(opts: any) {
         }
     }
 
-    // ── Score & Rank ──
+    // ── Score & Rank (from accumulated pool) ──
     const hnStorage = new Storage(join(ROOT_DIR, "data", "hackernews"));
     const v2exStorage = new Storage(join(ROOT_DIR, "data", "v2ex"));
 
-    const hnSkipIds = hnStorage.getRecentIds(config.skipHours);
-    const v2exSkipIds = v2exStorage.getRecentIds(config.skipHours);
+    const hnSkipIds = hnStorage.getRecentIds(config.skipHours, today);
+    const v2exSkipIds = v2exStorage.getRecentIds(config.skipHours, today);
 
-    const hnRanked = scoreAndRank(hnItems, opts.topN ?? config.hackernews.topN, hnSkipIds);
-    const v2exRanked = scoreAndRank(v2exItems, opts.topN ?? config.v2ex.topN, v2exSkipIds, config.v2ex.excludeNodes);
+    // Merge fresh fetch with accumulated data for a larger candidate pool
+    const hnPool = hnStorage.loadAll(today, hnItems);
+    const v2exPool = v2exStorage.loadAll(today, v2exItems);
 
-    console.log(`\n📊 HN: ${hnItems.length} → ${hnRanked.length} | V2EX: ${v2exItems.length} → ${v2exRanked.length}\n`);
+    const hnRanked = scoreAndRank(hnPool, opts.topN ?? config.hackernews.topN, hnSkipIds);
+    const v2exRanked = scoreAndRank(v2exPool, opts.topN ?? config.v2ex.topN, v2exSkipIds, config.v2ex.excludeNodes);
+
+    console.log(`\n📊 HN: ${hnItems.length} fetched, ${hnPool.length} pooled → ${hnRanked.length} ranked`);
+    console.log(`📊 V2EX: ${v2exItems.length} fetched, ${v2exPool.length} pooled → ${v2exRanked.length} ranked\n`);
 
     // ── Summarize ──
     const summarizer = useAi
@@ -114,6 +121,18 @@ async function runGenerate(opts: any) {
         let overall = "";
 
         if (summarizer && ranked.length > 0) {
+            // Fetch article content for better AI summaries
+            if (config.extractor.enabled) {
+                console.log("   📄 Extracting article content...");
+                await extractBatch(
+                    ranked.map((r) => r.item),
+                    {
+                        concurrency: config.extractor.concurrency,
+                        maxLength: config.extractor.maxLength,
+                        timeout: config.extractor.timeout,
+                    },
+                );
+            }
             for (const { item, score } of ranked) {
                 process.stdout.write(`   🤖 ${item.title.slice(0, 40)}...`);
                 const desc = await summarizer.summarizeItem(item.title, item.content);
@@ -144,7 +163,7 @@ async function runGenerate(opts: any) {
         const path = join(outDir, `hn-${today}.md`);
         writeFileSync(path, md, "utf-8");
         console.log(`✅ ${path}`);
-        hnStorage.save(today, hnItems);
+        hnStorage.merge(today, hnItems);
     }
 
     if (v2exRanked.length > 0) {
@@ -158,7 +177,7 @@ async function runGenerate(opts: any) {
         const path = join(outDir, `v2ex-${today}.md`);
         writeFileSync(path, md, "utf-8");
         console.log(`✅ ${path}`);
-        v2exStorage.save(today, v2exItems);
+        v2exStorage.merge(today, v2exItems);
     }
 
     if (hnRanked.length === 0 && v2exRanked.length === 0) {

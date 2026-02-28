@@ -21,5 +21,13 @@ v2ex:
   # nodes: ["hot"]
   # exclude_nodes: ["promotions", "deals", "cv", "exchange"]
   top_n: 20
+  # pages: 3                # 每个节点抓取的页数（仅 v2 API 节点生效）
 
 # skip_hours: 72            # 跳过最近 N 小时已见过的 item
+
+# 正文抓取（通过 Jina AI Reader 获取文章正文给 AI 总结）
+# extractor:
+#   enabled: true             # 设为 false 可关闭正文抓取
+#   concurrency: 3            # 并发数
+#   max_length: 5000          # 抓取正文最大字符数
+#   timeout: 15000            # 单次请求超时（ms）

@@ -66,12 +66,21 @@ ai:
 
 - **API**: V1（免 token）+ V2（需 token）
 - `hot` / `latest` → V1 API，**无需 Token**
-- 具体节点（如 `claude`, `python`）→ V2 API，**需要 Token**
+- 具体节点（如 `claude`, `python`）→ V2 API，**需要 Token**，支持**多页抓取**（默认 3 页）
 - **Token 获取**: [V2EX 设置页](https://www.v2ex.com/settings/tokens) 创建 Personal Access Token
 - **Rate Limit**: 每 IP 每小时 **600 次** 请求
 - **默认节点**: `hot`
 
 详细 API 文档见 [docs/](docs/)。
+
+## 正文抓取
+
+对筛选后的 top-n 文章，自动通过 [Jina AI Reader](https://r.jina.ai/) 抓取原文正文（Markdown 格式），让 AI 基于**完整文章内容**生成高质量摘要，而非仅依赖标题。
+
+- 零配置、免费、无需 API key
+- 自动跳过 HN 讨论页和 V2EX 帖子（无需抓取外链）
+- 并发控制（默认 3），超时 graceful fallback
+- 可通过 `extractor.enabled: false` 关闭
 
 ## 评分算法
 
@@ -87,9 +96,10 @@ score = (engagement - 1) / (hours + 2) ^ 1.8
 
 新且热门的内容得分更高，老内容自然衰减。
 
-## 去重机制
+## 去重与累积
 
-通过 `skip_hours`（默认 72h）实现去重：已在过去 N 小时内出现过的 item ID 会被跳过，避免连续多天生成相同内容。
+- **数据累积**: 每次运行 `generate` 会将新抓取的数据与当天已有数据**按 ID 合并**（upsert），而非覆盖。多次运行会持续扩大候选池，item 的 replies/points 等数据自动更新为最新值。
+- **跨天去重**: 通过 `skip_hours`（默认 72h）实现——已在过去 N 小时内**其他天**输出过的 item ID 会被跳过，避免连续多天生成相同内容。
 
 ## 输出
 
@@ -112,9 +122,10 @@ src/
 ├── config.ts             # 配置加载（YAML + env fallback）
 ├── types.ts              # 类型定义
 ├── scorer.ts             # 时间衰减评分
+├── extractor.ts          # 正文抓取（Jina AI Reader）
 ├── summarizer.ts         # AI 总结（OpenAI / Anthropic）
 ├── renderer.ts           # Markdown 渲染（HN 中文 / V2EX 中文）
-├── storage.ts            # JSON 存储 + 去重
+├── storage.ts            # JSON 存储（累积合并 + 去重）
 └── sources/
     ├── hackernews.ts     # HN API 客户端（并发 fetch）
     └── v2ex.ts           # V2EX API 客户端（v1 + v2）
