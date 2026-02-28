@@ -16,10 +16,7 @@ const DEFAULTS: ExtractorConfig = { concurrency: 3, maxLength: 5000, timeout: 15
 function isDiscussionUrl(item: NewsItem): boolean {
     try {
         const host = new URL(item.url).hostname.toLowerCase();
-        return (
-            host.includes("news.ycombinator.com") ||
-            host.includes("v2ex.com")
-        );
+        return host.includes("news.ycombinator.com");
     } catch {
         return true; // malformed URL, skip
     }

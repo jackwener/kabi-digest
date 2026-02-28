@@ -82,4 +82,5 @@ export interface V2EXRawTopic {
     member: { username: string };
     created: number;
     last_modified: number;
+    supplements?: { id: number; content: string; content_rendered: string; syntax: number; created: number }[];
 }

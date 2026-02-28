@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { loadConfig, ROOT_DIR } from "./config";
 import { fetchHN } from "./sources/hackernews";
 import { fetchV2EX } from "./sources/v2ex";
+import { enrichV2EXItems } from "./sources/enricher";
 import { scoreAndRank } from "./scorer";
 import { Summarizer } from "./summarizer";
 import { renderMarkdown } from "./renderer";
@@ -105,6 +106,16 @@ async function runGenerate(opts: any) {
 
     console.log(`\n📊 HN: ${hnItems.length} fetched, ${hnPool.length} pooled → ${hnRanked.length} ranked`);
     console.log(`📊 V2EX: ${v2exItems.length} fetched, ${v2exPool.length} pooled → ${v2exRanked.length} ranked\n`);
+
+    // ── Enrich V2EX items with supplements (附言) ──
+    if (v2exRanked.length > 0 && config.v2ex.token) {
+        console.log(`📎 Enriching V2EX items with supplements...`);
+        await enrichV2EXItems(
+            v2exRanked.map((r) => r.item),
+            config.v2ex.token,
+            { concurrency: config.extractor.concurrency, timeout: config.extractor.timeout },
+        );
+    }
 
     // ── Summarize ──
     const summarizer = useAi
