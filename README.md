@@ -12,6 +12,8 @@ cp config.example.yaml config.yaml   # 编辑填写 AI key（可选）
 bun run generate --no-ai             # 先跑一次看看效果
 ```
 
+> 🤖 **自动化**：通过 [OpenClaw 配置](openclaw.md) 定时采集数据和生成日报。
+
 ## 命令
 
 ```bash
