@@ -3,6 +3,7 @@
     "private": true,
     "type": "module",
     "scripts": {
+        "collect": "bun run src/index.ts collect",
         "generate": "bun run src/index.ts generate",
         "help": "bun run src/index.ts --help"
     },

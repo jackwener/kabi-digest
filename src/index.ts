@@ -11,7 +11,7 @@ import { Summarizer } from "./summarizer";
 import { renderMarkdown } from "./renderer";
 import { Storage } from "./storage";
 import { extractBatch } from "./extractor";
-import type { NewsItem, SummarizedItem } from "./types";
+import type { AppConfig, NewsItem, SummarizedItem } from "./types";
 
 function getToday(): string {
     return new Intl.DateTimeFormat("en-CA", {
@@ -23,17 +23,32 @@ function getToday(): string {
 const program = new Command();
 
 program
-    .name("kabi-reader")
+    .name("digest")
     .description("聚合阅读器 — V2EX + Hacker News 日报生成")
     .version("0.1.0");
 
 program
+    .command("collect")
+    .description("采集数据（只 fetch + merge，不评分不总结）")
+    .option("--hn-only", "仅 HN")
+    .option("--v2ex-only", "仅 V2EX")
+    .action(async (opts) => {
+        try {
+            await runCollect(opts);
+        } catch (err) {
+            console.error("❌", err);
+            process.exit(1);
+        }
+    });
+
+program
     .command("generate")
-    .description("生成今日日报")
+    .description("生成今日日报（从累积池评分 + AI 总结）")
     .option("--no-ai", "跳过 AI 总结")
     .option("-t, --top-n <number>", "覆盖每个源的 top-n", parseInt)
     .option("--hn-only", "仅 HN")
     .option("--v2ex-only", "仅 V2EX")
+    .option("--no-fetch", "不抓取新数据，仅从已有累积池生成")
     .action(async (opts) => {
         try {
             await runGenerate(opts);
@@ -45,6 +60,33 @@ program
 
 program.parse();
 
+// ── collect ──────────────────────────────────────────────
+
+async function runCollect(opts: any) {
+    const config = loadConfig();
+    const today = getToday();
+
+    console.log(`📥 collect — ${today}\n`);
+
+    const { hnItems, v2exItems } = await fetchAll(config, opts);
+
+    const hnStorage = new Storage(join(ROOT_DIR, "data", "hackernews"));
+    const v2exStorage = new Storage(join(ROOT_DIR, "data", "v2ex"));
+
+    if (hnItems.length > 0) {
+        hnStorage.merge(today, hnItems);
+        const pool = hnStorage.load(today);
+        console.log(`\n💾 HN: ${hnItems.length} fetched → ${pool.length} total in pool`);
+    }
+    if (v2exItems.length > 0) {
+        v2exStorage.merge(today, v2exItems);
+        const pool = v2exStorage.load(today);
+        console.log(`💾 V2EX: ${v2exItems.length} fetched → ${pool.length} total in pool`);
+    }
+
+    console.log("\n✅ Data collected. Run `generate` when ready to produce the digest.");
+}
+
 // ── generate ──────────────────────────────────────────────
 
 async function runGenerate(opts: any) {
@@ -52,42 +94,17 @@ async function runGenerate(opts: any) {
     const today = getToday();
     const useAi = opts.ai !== false && !!config.ai.apiKey;
 
-    console.log(`📋 kabi-reader — ${today}`);
+    console.log(`📋 generate — ${today}`);
     console.log(`   AI: ${useAi ? `${config.ai.provider}/${config.ai.model}` : "disabled"}\n`);
 
-    // ── Fetch ──
-    const hnItems: NewsItem[] = [];
-    const v2exItems: NewsItem[] = [];
+    // ── Fetch (unless --no-fetch) ──
+    let hnItems: NewsItem[] = [];
+    let v2exItems: NewsItem[] = [];
 
-    if (config.hackernews.enabled && !opts.v2exOnly) {
-        const topN = opts.topN ?? config.hackernews.topN;
-        console.log(`🔶 Hacker News (top-n: ${topN})`);
-        for (const list of config.hackernews.lists) {
-            process.stdout.write(`   Fetching ${list}...`);
-            try {
-                const items = await fetchHN(list, config.hackernews.limit);
-                hnItems.push(...items);
-                console.log(` ${items.length} stories`);
-            } catch (err) {
-                console.log(` ⚠️ failed:`, err instanceof Error ? err.message : err);
-            }
-        }
-    }
-
-    if (config.v2ex.enabled && !opts.hnOnly) {
-        const topN = opts.topN ?? config.v2ex.topN;
-        const pages = config.v2ex.pages;
-        console.log(`🟢 V2EX (top-n: ${topN}, pages: ${pages})`);
-        for (const node of config.v2ex.nodes) {
-            process.stdout.write(`   Fetching ${node}...`);
-            try {
-                const items = await fetchV2EX(node, config.v2ex.token, pages);
-                v2exItems.push(...items);
-                console.log(` ${items.length} topics`);
-            } catch (err) {
-                console.log(` ⚠️ failed:`, err instanceof Error ? err.message : err);
-            }
-        }
+    if (opts.fetch !== false) {
+        ({ hnItems, v2exItems } = await fetchAll(config, opts));
+    } else {
+        console.log("⏭  Skipping fetch (--no-fetch)\n");
     }
 
     // ── Score & Rank (from accumulated pool) ──
@@ -97,9 +114,8 @@ async function runGenerate(opts: any) {
     const hnSkipIds = hnStorage.getRecentIds(config.skipHours, today);
     const v2exSkipIds = v2exStorage.getRecentIds(config.skipHours, today);
 
-    // Merge fresh fetch with accumulated data for a larger candidate pool
-    const hnPool = hnStorage.loadAll(today, hnItems);
-    const v2exPool = v2exStorage.loadAll(today, v2exItems);
+    const hnPool = !opts.v2exOnly ? hnStorage.loadAll(today, hnItems) : [];
+    const v2exPool = !opts.hnOnly ? v2exStorage.loadAll(today, v2exItems) : [];
 
     const hnRanked = scoreAndRank(hnPool, opts.topN ?? config.hackernews.topN, hnSkipIds);
     const v2exRanked = scoreAndRank(v2exPool, opts.topN ?? config.v2ex.topN, v2exSkipIds, config.v2ex.excludeNodes);
@@ -132,7 +148,6 @@ async function runGenerate(opts: any) {
         let overall = "";
 
         if (summarizer && ranked.length > 0) {
-            // Fetch article content for better AI summaries
             if (config.extractor.enabled) {
                 console.log("   📄 Extracting article content...");
                 await extractBatch(
@@ -196,4 +211,42 @@ async function runGenerate(opts: any) {
     }
 
     console.log("\n🎉 Done!");
+}
+
+// ── shared fetch logic ──────────────────────────────────
+
+async function fetchAll(config: AppConfig, opts: any) {
+    const hnItems: NewsItem[] = [];
+    const v2exItems: NewsItem[] = [];
+
+    if (config.hackernews.enabled && !opts.v2exOnly) {
+        console.log(`🔶 Hacker News`);
+        for (const list of config.hackernews.lists) {
+            process.stdout.write(`   Fetching ${list}...`);
+            try {
+                const items = await fetchHN(list, config.hackernews.limit);
+                hnItems.push(...items);
+                console.log(` ${items.length} stories`);
+            } catch (err) {
+                console.log(` ⚠️ failed:`, err instanceof Error ? err.message : err);
+            }
+        }
+    }
+
+    if (config.v2ex.enabled && !opts.hnOnly) {
+        const pages = config.v2ex.pages;
+        console.log(`🟢 V2EX (pages: ${pages})`);
+        for (const node of config.v2ex.nodes) {
+            process.stdout.write(`   Fetching ${node}...`);
+            try {
+                const items = await fetchV2EX(node, config.v2ex.token, pages);
+                v2exItems.push(...items);
+                console.log(` ${items.length} topics`);
+            } catch (err) {
+                console.log(` ⚠️ failed:`, err instanceof Error ? err.message : err);
+            }
+        }
+    }
+
+    return { hnItems, v2exItems };
 }
