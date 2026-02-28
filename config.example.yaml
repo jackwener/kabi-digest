@@ -11,7 +11,7 @@ ai:
 # Hacker News
 hackernews:
   # enabled: true
-  # lists: ["top"]          # top, new, best, ask, show
+  # lists: ["top", "openclaw", "programmer"]          # top, new, best, ask, show
   # limit: 30
   top_n: 20
 
