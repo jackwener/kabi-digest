@@ -1,0 +1,24 @@
+# kabi-reader 配置
+
+# AI 配置（可选，不配则跳过 AI 总结）
+ai:
+  api_key: ""               # 或设置环境变量 OPENAI_API_KEY
+  model: "gpt-4o-mini"
+  base_url: ""              # 兼容 API 地址
+  # provider: "openai"      # openai | anthropic
+
+# Hacker News
+hackernews:
+  # enabled: true
+  # lists: ["top"]          # top, new, best, ask, show
+  # limit: 30
+  top_n: 20
+
+# V2EX
+v2ex:
+  # token: ""               # 或设置环境变量 V2EX_TOKEN
+  # nodes: ["hot"]
+  # exclude_nodes: ["promotions", "deals", "cv", "exchange"]
+  top_n: 20
+
+# skip_hours: 72            # 跳过最近 N 小时已见过的 item
