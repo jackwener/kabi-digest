@@ -16,6 +16,7 @@ hackernews:
 
 # V2EX
 v2ex:
+  # enabled: true
   # token: ""               # 或设置环境变量 V2EX_TOKEN
   # nodes: ["hot"]
   # exclude_nodes: ["promotions", "deals", "cv", "exchange"]
