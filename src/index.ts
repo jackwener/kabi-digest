@@ -87,6 +87,41 @@ async function runCollect(opts: any) {
     console.log("\n✅ Data collected. Run `generate` when ready to produce the digest.");
 }
 
+// ── helpers ───────────────────────────────────────────────
+
+/**
+ * Generate a plain-text snippet from article content.
+ * Truncates at sentence/paragraph boundary within maxLen.
+ */
+function generateSnippet(content: string, maxLen = 300): string {
+    if (!content || !content.trim()) return "";
+    // Strip Jina Reader metadata, markdown images/links, and excessive whitespace
+    const cleaned = content
+        .replace(/^URL Source:.*\n?/gim, "")
+        .replace(/^Published Time:.*\n?/gim, "")
+        .replace(/^Markdown Content:\n?/gim, "")
+        .replace(/^#+\s+.*/gm, "")
+        .replace(/^[-=]{3,}\s*$/gm, "")
+        .replace(/!\[.*?\]\(.*?\)/g, "")
+        .replace(/\[([^\]]+)\]\(.*?\)/g, "$1")
+        .replace(/\n{3,}/g, "\n\n")
+        .trim();
+    if (cleaned.length <= maxLen) return cleaned;
+    // Try to cut at sentence boundary
+    const truncated = cleaned.slice(0, maxLen);
+    const lastPeriod = Math.max(
+        truncated.lastIndexOf("。"),
+        truncated.lastIndexOf(". "),
+        truncated.lastIndexOf("！"),
+        truncated.lastIndexOf("？"),
+    );
+    if (lastPeriod > maxLen * 0.4) return truncated.slice(0, lastPeriod + 1);
+    // Fallback: cut at last space
+    const lastSpace = truncated.lastIndexOf(" ");
+    if (lastSpace > maxLen * 0.5) return truncated.slice(0, lastSpace) + "...";
+    return truncated + "...";
+}
+
 // ── generate ──────────────────────────────────────────────
 
 async function runGenerate(opts: any) {
@@ -147,18 +182,20 @@ async function runGenerate(opts: any) {
         const items: SummarizedItem[] = [];
         let overall = "";
 
+        // Content extraction — always run (free, no API key needed)
+        if (config.extractor.enabled && ranked.length > 0) {
+            console.log("   📄 Extracting article content...");
+            await extractBatch(
+                ranked.map((r) => r.item),
+                {
+                    concurrency: config.extractor.concurrency,
+                    maxLength: config.extractor.maxLength,
+                    timeout: config.extractor.timeout,
+                },
+            );
+        }
+
         if (summarizer && ranked.length > 0) {
-            if (config.extractor.enabled) {
-                console.log("   📄 Extracting article content...");
-                await extractBatch(
-                    ranked.map((r) => r.item),
-                    {
-                        concurrency: config.extractor.concurrency,
-                        maxLength: config.extractor.maxLength,
-                        timeout: config.extractor.timeout,
-                    },
-                );
-            }
             for (const { item, score } of ranked) {
                 process.stdout.write(`   🤖 ${item.title.slice(0, 40)}...`);
                 const desc = await summarizer.summarizeItem(item.title, item.content);
@@ -167,8 +204,10 @@ async function runGenerate(opts: any) {
             }
             overall = await summarizer.summarizeAll(ranked.map((r) => r.item));
         } else {
+            // No AI: use content snippet as description
             for (const { item, score } of ranked) {
-                items.push({ item, score, description: "" });
+                const snippet = generateSnippet(item.content);
+                items.push({ item, score, description: snippet });
             }
         }
         return { items, overall };

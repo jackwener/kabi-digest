@@ -19,10 +19,11 @@ cd ~/code/digest && bun run collect
 从当天累积的完整数据池生成最终日报：
 
 ```bash
-cd ~/code/digest && bun run generate --no-fetch
+cd ~/code/digest && bun run generate --no-fetch --no-ai
 ```
 
-> `--no-fetch` 表示不再抓取新数据，仅从已有累积池评分 + AI 总结 + 输出 Markdown 日报。
+> `--no-fetch` 表示不再抓取新数据，仅从已有累积池生成。
+> `--no-ai` 跳过 AI 总结，但仍会通过 Jina Reader 抓取文章正文，输出包含内容 snippet 的日报（无需配置 API Key）。
 > 输出文件：`out/hn-YYYY-MM-DD.md` 和 `out/v2ex-YYYY-MM-DD.md`。
 
 ### 3. 发送日报（每天 09:00）
@@ -52,5 +53,5 @@ cat out/v2ex-$(date -v-1d +%Y-%m-%d).md
 | 时间 | 任务 | 命令 |
 |------|------|------|
 | 08:00, 10:00, 12:00, 14:00, 16:00, 18:00, 20:00, 22:00 | 数据采集 | `bun run collect` |
-| 23:00 | 生成日报 | `bun run generate --no-fetch` |
+| 23:00 | 生成日报 | `bun run generate --no-fetch --no-ai` |
 | 09:00（次日） | 发送昨日日报 | 读取 `out/*-昨日日期.md` 发送 |
