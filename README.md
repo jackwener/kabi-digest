@@ -24,16 +24,15 @@ bun run collect               # 采集 V2EX + HN 数据
 bun run collect --hn-only     # 仅采集 HN
 bun run collect --v2ex-only   # 仅采集 V2EX
 
-# 生成模式（评分 + AI 总结 + 输出日报）
-bun run generate              # 抓取新数据 + 从累积池生成日报
-bun run generate --no-fetch   # 不抓取，仅从已有累积池生成
-bun run generate --no-ai      # 跳过 AI 总结
+# 生成模式（从累积池评分 + 正文抓取 + 可选 AI 总结）
+bun run generate              # 从累积池生成日报
+bun run generate --no-ai      # 跳过 AI 总结，输出正文 snippet
 bun run generate --hn-only    # 仅 HN
 bun run generate --v2ex-only  # 仅 V2EX
 bun run generate --top-n 5    # 覆盖 top-n 数量
 ```
 
-**推荐用法**：白天定时 `collect` 积累数据，晚上跑一次 `generate --no-fetch` 生成最终日报，省 token。
+**推荐用法**：白天定时 `collect` 累积数据，晚上跑一次 `generate` 生成最终日报。
 
 ## 配置
 

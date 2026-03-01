@@ -43,12 +43,11 @@ program
 
 program
     .command("generate")
-    .description("生成今日日报（从累积池评分 + AI 总结）")
+    .description("从累积池生成今日日报（评分 + 正文抓取 + 可选 AI 总结）")
     .option("--no-ai", "跳过 AI 总结")
     .option("-t, --top-n <number>", "覆盖每个源的 top-n", parseInt)
     .option("--hn-only", "仅 HN")
     .option("--v2ex-only", "仅 V2EX")
-    .option("--no-fetch", "不抓取新数据，仅从已有累积池生成")
     .action(async (opts) => {
         try {
             await runGenerate(opts);
@@ -132,16 +131,6 @@ async function runGenerate(opts: any) {
     console.log(`📋 generate — ${today}`);
     console.log(`   AI: ${useAi ? `${config.ai.provider}/${config.ai.model}` : "disabled"}\n`);
 
-    // ── Fetch (unless --no-fetch) ──
-    let hnItems: NewsItem[] = [];
-    let v2exItems: NewsItem[] = [];
-
-    if (opts.fetch !== false) {
-        ({ hnItems, v2exItems } = await fetchAll(config, opts));
-    } else {
-        console.log("⏭  Skipping fetch (--no-fetch)\n");
-    }
-
     // ── Score & Rank (from accumulated pool) ──
     const hnStorage = new Storage(join(ROOT_DIR, "data", "hackernews"));
     const v2exStorage = new Storage(join(ROOT_DIR, "data", "v2ex"));
@@ -149,14 +138,14 @@ async function runGenerate(opts: any) {
     const hnSkipIds = hnStorage.getRecentIds(config.skipHours, today);
     const v2exSkipIds = v2exStorage.getRecentIds(config.skipHours, today);
 
-    const hnPool = !opts.v2exOnly ? hnStorage.loadAll(today, hnItems) : [];
-    const v2exPool = !opts.hnOnly ? v2exStorage.loadAll(today, v2exItems) : [];
+    const hnPool = !opts.v2exOnly ? hnStorage.loadAll(today, []) : [];
+    const v2exPool = !opts.hnOnly ? v2exStorage.loadAll(today, []) : [];
 
     const hnRanked = scoreAndRank(hnPool, opts.topN ?? config.hackernews.topN, hnSkipIds);
     const v2exRanked = scoreAndRank(v2exPool, opts.topN ?? config.v2ex.topN, v2exSkipIds, config.v2ex.excludeNodes);
 
-    console.log(`\n📊 HN: ${hnItems.length} fetched, ${hnPool.length} pooled → ${hnRanked.length} ranked`);
-    console.log(`📊 V2EX: ${v2exItems.length} fetched, ${v2exPool.length} pooled → ${v2exRanked.length} ranked\n`);
+    console.log(`📊 HN: ${hnPool.length} pooled → ${hnRanked.length} ranked`);
+    console.log(`📊 V2EX: ${v2exPool.length} pooled → ${v2exRanked.length} ranked\n`);
 
     // ── Enrich V2EX items with supplements (附言) ──
     if (v2exRanked.length > 0 && config.v2ex.token) {
@@ -228,7 +217,6 @@ async function runGenerate(opts: any) {
         const path = join(outDir, `hn-${today}.md`);
         writeFileSync(path, md, "utf-8");
         console.log(`✅ ${path}`);
-        hnStorage.merge(today, hnItems);
     }
 
     if (v2exRanked.length > 0) {
@@ -242,7 +230,6 @@ async function runGenerate(opts: any) {
         const path = join(outDir, `v2ex-${today}.md`);
         writeFileSync(path, md, "utf-8");
         console.log(`✅ ${path}`);
-        v2exStorage.merge(today, v2exItems);
     }
 
     if (hnRanked.length === 0 && v2exRanked.length === 0) {
