@@ -8,7 +8,7 @@ interface ExtractorConfig {
     timeout: number;
 }
 
-const DEFAULTS: ExtractorConfig = { concurrency: 3, maxLength: 5000, timeout: 15000 };
+const DEFAULTS: ExtractorConfig = { concurrency: 3, maxLength: 20000, timeout: 15000 };
 
 /**
  * Check if URL points to a discussion page (no external article to fetch).
@@ -30,13 +30,13 @@ async function extractContent(
     url: string,
     maxLength: number,
     timeout: number,
-): Promise<string> {
+): Promise<{ content: string; truncated: boolean }> {
     try {
         const resp = await fetch(`${JINA_PREFIX}${url}`, {
             headers: { Accept: "text/markdown" },
             signal: AbortSignal.timeout(timeout),
         });
-        if (!resp.ok) return "";
+        if (!resp.ok) return { content: "", truncated: false };
         const text = await resp.text();
         // Strip Jina Reader metadata lines
         const cleaned = text
@@ -45,9 +45,10 @@ async function extractContent(
             .replace(/^Published Time:.*\n?/gim, "")
             .replace(/^Markdown Content:\n?/gim, "")
             .trim();
-        return cleaned.slice(0, maxLength);
+        const truncated = cleaned.length > maxLength;
+        return { content: cleaned.slice(0, maxLength), truncated };
     } catch {
-        return "";
+        return { content: "", truncated: false };
     }
 }
 
@@ -73,9 +74,10 @@ export async function extractBatch(
             if (idx >= toFetch.length) break;
             const item = toFetch[idx]!;
             process.stdout.write(`   📄 ${item.title.slice(0, 50)}...`);
-            const content = await extractContent(item.url, maxLength, timeout);
+            const { content, truncated } = await extractContent(item.url, maxLength, timeout);
             if (content) {
                 item.content = content;
+                item.contentTruncated = truncated;
                 console.log(` ✓ (${content.length} chars)`);
             } else {
                 console.log(` ⏭ (fallback to existing)`);

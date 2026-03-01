@@ -1,11 +1,24 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { NewsItem } from "./types";
 
 interface DailyData {
     date: string;
     fetchedAt: string;
     items: NewsItem[];
+}
+
+type SourceName = "hackernews" | "v2ex";
+
+interface PublishedRecord {
+    date: string;
+    source: SourceName;
+    id: string;
+    publishedAt: string;
+}
+
+interface PublishedIndexData {
+    records: PublishedRecord[];
 }
 
 export class Storage {
@@ -65,5 +78,51 @@ export class Storage {
             } catch { /* skip corrupt */ }
         }
         return ids;
+    }
+}
+
+export class PublishedIndex {
+    constructor(private filePath: string) {
+        mkdirSync(dirname(filePath), { recursive: true });
+    }
+
+    markPublished(date: string, source: SourceName, ids: string[]): void {
+        if (ids.length === 0) return;
+        const data = this.loadData();
+        const key = (r: PublishedRecord) => `${r.source}:${r.id}`;
+        const map = new Map<string, PublishedRecord>(data.records.map((r) => [key(r), r]));
+        const now = new Date().toISOString();
+
+        for (const id of ids) {
+            map.set(`${source}:${id}`, { date, source, id, publishedAt: now });
+        }
+
+        const next: PublishedIndexData = { records: Array.from(map.values()) };
+        writeFileSync(this.filePath, JSON.stringify(next, null, 2), "utf-8");
+    }
+
+    getRecentIds(hours: number, source: SourceName, excludeDate?: string): Set<string> {
+        const ids = new Set<string>();
+        const cutoff = Date.now() - hours * 3_600_000;
+        const data = this.loadData();
+        for (const record of data.records) {
+            if (record.source !== source) continue;
+            if (excludeDate && record.date === excludeDate) continue;
+            if (new Date(record.publishedAt).getTime() < cutoff) continue;
+            ids.add(record.id);
+        }
+        return ids;
+    }
+
+    private loadData(): PublishedIndexData {
+        if (!existsSync(this.filePath)) return { records: [] };
+        try {
+            const raw = readFileSync(this.filePath, "utf-8");
+            const data = JSON.parse(raw) as PublishedIndexData;
+            if (!data || !Array.isArray(data.records)) return { records: [] };
+            return data;
+        } catch {
+            return { records: [] };
+        }
     }
 }

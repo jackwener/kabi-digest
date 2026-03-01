@@ -6,6 +6,7 @@ export interface NewsItem {
     title: string;
     url: string;          // original / discussion URL
     content: string;      // plain text (stripped HTML)
+    contentTruncated?: boolean;
     category: string;     // node name or story type
     author: string;
     replies: number;
@@ -18,8 +19,11 @@ export interface ScoredItem {
     score: number;
 }
 
-export interface SummarizedItem extends ScoredItem {
-    description: string;
+export type OutputProfile = "human_digest" | "llm_context";
+
+export interface OutputItem extends ScoredItem {
+    digest: string;   // short summary for human readers
+    context: string;  // full text context for downstream LLM consumers
 }
 
 // ── Config ──
@@ -83,4 +87,13 @@ export interface V2EXRawTopic {
     created: number;
     last_modified: number;
     supplements?: { id: number; content: string; content_rendered: string; syntax: number; created: number }[];
+}
+
+export interface V2EXRawReply {
+    id: number;
+    content: string;
+    content_rendered: string;
+    created: number;
+    last_modified?: number;
+    member?: { username: string };
 }

@@ -9,15 +9,29 @@ import { enrichV2EXItems } from "./sources/enricher";
 import { scoreAndRank } from "./scorer";
 import { Summarizer } from "./summarizer";
 import { renderMarkdown } from "./renderer";
-import { Storage } from "./storage";
+import { PublishedIndex, Storage } from "./storage";
 import { extractBatch } from "./extractor";
-import type { AppConfig, NewsItem, SummarizedItem } from "./types";
+import type { AppConfig, NewsItem, OutputItem, ScoredItem } from "./types";
 
 function getToday(): string {
     return new Intl.DateTimeFormat("en-CA", {
         timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
         year: "numeric", month: "2-digit", day: "2-digit",
     }).format(new Date());
+}
+
+type GenerateMode = "ai_digest" | "openclaw";
+
+function parseGenerateMode(raw: string): GenerateMode {
+    if (raw === "ai_digest" || raw === "openclaw") return raw;
+    throw new Error(`Invalid profile "${raw}". Use "ai_digest" or "openclaw".`);
+}
+
+function withGenerateOptions(cmd: Command): Command {
+    return cmd
+        .option("-t, --top-n <number>", "覆盖每个源的 top-n", parseInt)
+        .option("--hn-only", "仅 HN")
+        .option("--v2ex-only", "仅 V2EX");
 }
 
 const program = new Command();
@@ -41,21 +55,45 @@ program
         }
     });
 
-program
-    .command("generate")
-    .description("从累积池生成今日日报（评分 + 正文抓取 + 可选 AI 总结）")
-    .option("--no-ai", "跳过 AI 总结")
-    .option("-t, --top-n <number>", "覆盖每个源的 top-n", parseInt)
-    .option("--hn-only", "仅 HN")
-    .option("--v2ex-only", "仅 V2EX")
-    .action(async (opts) => {
-        try {
-            await runGenerate(opts);
-        } catch (err) {
-            console.error("❌", err);
-            process.exit(1);
-        }
-    });
+withGenerateOptions(
+    program
+        .command("generate")
+        .description("从累积池生成日报（需指定 profile: ai_digest | openclaw）")
+        .requiredOption("--profile <profile>", "ai_digest | openclaw"),
+).action(async (opts) => {
+    try {
+        await runGenerate(opts, parseGenerateMode(opts.profile));
+    } catch (err) {
+        console.error("❌", err);
+        process.exit(1);
+    }
+});
+
+withGenerateOptions(
+    program
+        .command("generate-ai")
+        .description("AI 日报模式（强制要求 AI key）"),
+).action(async (opts) => {
+    try {
+        await runGenerate(opts, "ai_digest");
+    } catch (err) {
+        console.error("❌", err);
+        process.exit(1);
+    }
+});
+
+withGenerateOptions(
+    program
+        .command("generate-openclaw")
+        .description("OpenClaw 模式（不使用 AI，输出 top_n JSON）"),
+).action(async (opts) => {
+    try {
+        await runGenerate(opts, "openclaw");
+    } catch (err) {
+        console.error("❌", err);
+        process.exit(1);
+    }
+});
 
 program.parse();
 
@@ -94,7 +132,6 @@ async function runCollect(opts: any) {
  */
 function generateSnippet(content: string, maxLen = 300): string {
     if (!content || !content.trim()) return "";
-    // Strip Jina Reader metadata, markdown images/links, and excessive whitespace
     const cleaned = content
         .replace(/^URL Source:.*\n?/gim, "")
         .replace(/^Published Time:.*\n?/gim, "")
@@ -106,7 +143,7 @@ function generateSnippet(content: string, maxLen = 300): string {
         .replace(/\n{3,}/g, "\n\n")
         .trim();
     if (cleaned.length <= maxLen) return cleaned;
-    // Try to cut at sentence boundary
+
     const truncated = cleaned.slice(0, maxLen);
     const lastPeriod = Math.max(
         truncated.lastIndexOf("。"),
@@ -115,7 +152,7 @@ function generateSnippet(content: string, maxLen = 300): string {
         truncated.lastIndexOf("？"),
     );
     if (lastPeriod > maxLen * 0.4) return truncated.slice(0, lastPeriod + 1);
-    // Fallback: cut at last space
+
     const lastSpace = truncated.lastIndexOf(" ");
     if (lastSpace > maxLen * 0.5) return truncated.slice(0, lastSpace) + "...";
     return truncated + "...";
@@ -123,23 +160,35 @@ function generateSnippet(content: string, maxLen = 300): string {
 
 // ── generate ──────────────────────────────────────────────
 
-async function runGenerate(opts: any) {
+async function runGenerate(opts: any, mode: GenerateMode) {
     const config = loadConfig();
     const today = getToday();
-    const useAi = opts.ai !== false && !!config.ai.apiKey;
+
+    if (mode === "ai_digest" && !config.ai.apiKey) {
+        throw new Error("AI mode requires ai.api_key (or OPENAI_API_KEY / ANTHROPIC_API_KEY).");
+    }
+    if (!config.extractor.enabled) {
+        throw new Error("extractor.enabled must be true in generate mode.");
+    }
+
+    const useAi = mode === "ai_digest";
 
     console.log(`📋 generate — ${today}`);
+    console.log(`   Mode: ${mode}`);
     console.log(`   AI: ${useAi ? `${config.ai.provider}/${config.ai.model}` : "disabled"}\n`);
 
-    // ── Score & Rank (from accumulated pool) ──
     const hnStorage = new Storage(join(ROOT_DIR, "data", "hackernews"));
     const v2exStorage = new Storage(join(ROOT_DIR, "data", "v2ex"));
+    const publishedIndex = new PublishedIndex(join(ROOT_DIR, "data", "published", "index.json"));
 
-    const hnSkipIds = hnStorage.getRecentIds(config.skipHours, today);
-    const v2exSkipIds = v2exStorage.getRecentIds(config.skipHours, today);
+    const hnSkipIds = publishedIndex.getRecentIds(config.skipHours, "hackernews", today);
+    const v2exSkipIds = publishedIndex.getRecentIds(config.skipHours, "v2ex", today);
 
-    const hnPool = !opts.v2exOnly ? hnStorage.loadAll(today, []) : [];
-    const v2exPool = !opts.hnOnly ? v2exStorage.loadAll(today, []) : [];
+    const enableHn = !opts.v2exOnly;
+    const enableV2ex = !opts.hnOnly;
+
+    const hnPool = enableHn ? hnStorage.loadAll(today, []) : [];
+    const v2exPool = enableV2ex ? v2exStorage.loadAll(today, []) : [];
 
     const hnRanked = scoreAndRank(hnPool, opts.topN ?? config.hackernews.topN, hnSkipIds);
     const v2exRanked = scoreAndRank(v2exPool, opts.topN ?? config.v2ex.topN, v2exSkipIds, config.v2ex.excludeNodes);
@@ -147,9 +196,76 @@ async function runGenerate(opts: any) {
     console.log(`📊 HN: ${hnPool.length} pooled → ${hnRanked.length} ranked`);
     console.log(`📊 V2EX: ${v2exPool.length} pooled → ${v2exRanked.length} ranked\n`);
 
-    // ── Enrich V2EX items with supplements (附言) ──
-    if (v2exRanked.length > 0 && config.v2ex.token) {
-        console.log(`📎 Enriching V2EX items with supplements...`);
+    const outDir = join(ROOT_DIR, "out");
+    mkdirSync(outDir, { recursive: true });
+
+    if (mode === "openclaw") {
+        if (v2exRanked.length > 0) {
+            console.log("📎 Enriching V2EX items with replies/supplements...");
+            await enrichV2EXItems(
+                v2exRanked.map((r) => r.item),
+                config.v2ex.token,
+                {
+                    concurrency: config.extractor.concurrency,
+                    maxLength: Number.MAX_SAFE_INTEGER,
+                    timeout: config.extractor.timeout,
+                },
+            );
+        }
+
+        const allRankedItems = [...hnRanked, ...v2exRanked].map((r) => r.item);
+        if (allRankedItems.length > 0) {
+            console.log("   📄 Extracting article content...");
+            await extractBatch(
+                allRankedItems,
+                {
+                    concurrency: config.extractor.concurrency,
+                    maxLength: Number.MAX_SAFE_INTEGER,
+                    timeout: config.extractor.timeout,
+                },
+            );
+        }
+
+        const openclawDir = join(outDir, "openclaw");
+        mkdirSync(openclawDir, { recursive: true });
+
+        function writeOpenClawJson(sourceName: "hn" | "v2ex", ranked: ScoredItem[]) {
+            const payload = {
+                profile: "openclaw",
+                source: sourceName,
+                date: today,
+                topN: ranked.length,
+                generatedAt: new Date().toISOString(),
+                items: ranked.map((r, idx) => ({
+                    rank: idx + 1,
+                    score: Number(r.score.toFixed(6)),
+                    ...r.item,
+                    contentTruncated: Boolean(r.item.contentTruncated),
+                })),
+            };
+            const path = join(openclawDir, `${sourceName}-${today}.json`);
+            writeFileSync(path, JSON.stringify(payload, null, 2), "utf-8");
+            console.log(`✅ ${path}`);
+        }
+
+        if (enableHn) {
+            writeOpenClawJson("hn", hnRanked);
+            publishedIndex.markPublished(today, "hackernews", hnRanked.map((r) => r.item.id));
+        }
+        if (enableV2ex) {
+            writeOpenClawJson("v2ex", v2exRanked);
+            publishedIndex.markPublished(today, "v2ex", v2exRanked.map((r) => r.item.id));
+        }
+
+        if (hnRanked.length === 0 && v2exRanked.length === 0) {
+            console.log("ℹ️  当前没有可发布条目，已输出空 openclaw JSON 文件");
+        }
+        console.log("\n🎉 Done!");
+        return;
+    }
+
+    if (v2exRanked.length > 0) {
+        console.log("📎 Enriching V2EX items with replies/supplements...");
         await enrichV2EXItems(
             v2exRanked.map((r) => r.item),
             config.v2ex.token,
@@ -157,7 +273,6 @@ async function runGenerate(opts: any) {
         );
     }
 
-    // ── Summarize ──
     const summarizer = useAi
         ? new Summarizer({
             provider: config.ai.provider,
@@ -167,11 +282,9 @@ async function runGenerate(opts: any) {
         })
         : null;
 
-    async function summarizeGroup(ranked: { item: NewsItem; score: number }[]): Promise<{ items: SummarizedItem[]; overall: string }> {
-        const items: SummarizedItem[] = [];
+    async function summarizeGroup(ranked: ScoredItem[]): Promise<{ items: OutputItem[]; overall: string }> {
         let overall = "";
 
-        // Content extraction — always run (free, no API key needed)
         if (config.extractor.enabled && ranked.length > 0) {
             console.log("   📄 Extracting article content...");
             await extractBatch(
@@ -184,52 +297,72 @@ async function runGenerate(opts: any) {
             );
         }
 
+        const items: OutputItem[] = ranked.map(({ item, score }) => {
+            const context = (item.content || "").trim();
+            const digest = generateSnippet(context || item.title);
+            return { item, score, digest, context };
+        });
+
         if (summarizer && ranked.length > 0) {
-            for (const { item, score } of ranked) {
+            for (const outputItem of items) {
+                const { item } = outputItem;
                 process.stdout.write(`   🤖 ${item.title.slice(0, 40)}...`);
-                const desc = await summarizer.summarizeItem(item.title, item.content);
-                items.push({ item, score, description: desc });
-                console.log(" ✓");
+                const aiDigest = await summarizer.summarizeItem(item.title, outputItem.context || item.title);
+                if (aiDigest.trim()) {
+                    outputItem.digest = aiDigest.trim();
+                    console.log(" ✓");
+                } else {
+                    console.log(" ⏭ (fallback snippet)");
+                }
             }
-            overall = await summarizer.summarizeAll(ranked.map((r) => r.item));
-        } else {
-            // No AI: include full extracted content for downstream consumers (e.g. OpenClaw)
-            for (const { item, score } of ranked) {
-                items.push({ item, score, description: item.content || "" });
-            }
+            overall = await summarizer.summarizeAll(
+                items.map(({ item, context }) => ({ ...item, content: context || item.content })),
+            );
         }
+
         return { items, overall };
     }
 
-    // ── Render & Write ──
-    const outDir = join(ROOT_DIR, "out");
-    mkdirSync(outDir, { recursive: true });
+    const humanOutDir = join(outDir, "human_digest");
+    const llmOutDir = join(outDir, "llm_context");
+    mkdirSync(humanOutDir, { recursive: true });
+    mkdirSync(llmOutDir, { recursive: true });
 
-    if (hnRanked.length > 0) {
-        const { items, overall } = await summarizeGroup(hnRanked);
-        const md = renderMarkdown({
-            title: `Hacker News 日报 ${today}`,
+    async function writeSourceOutputs(sourceName: "hn" | "v2ex", title: string, ranked: ScoredItem[]) {
+        if (ranked.length === 0) return;
+        const { items, overall } = await summarizeGroup(ranked);
+
+        const llmMd = renderMarkdown({
+            title,
             date: today,
             summary: overall,
             items,
+            profile: "llm_context",
         });
-        const path = join(outDir, `hn-${today}.md`);
-        writeFileSync(path, md, "utf-8");
-        console.log(`✅ ${path}`);
-    }
+        const llmPath = join(llmOutDir, `${sourceName}-${today}.md`);
+        writeFileSync(llmPath, llmMd, "utf-8");
+        console.log(`✅ ${llmPath}`);
 
-    if (v2exRanked.length > 0) {
-        const { items, overall } = await summarizeGroup(v2exRanked);
-        const md = renderMarkdown({
-            title: `V2EX 日报 ${today}`,
+        const humanMd = renderMarkdown({
+            title,
             date: today,
             summary: overall,
             items,
+            profile: "human_digest",
         });
-        const path = join(outDir, `v2ex-${today}.md`);
-        writeFileSync(path, md, "utf-8");
-        console.log(`✅ ${path}`);
+        const humanPath = join(humanOutDir, `${sourceName}-${today}.md`);
+
+        writeFileSync(humanPath, humanMd, "utf-8");
+        console.log(`✅ ${humanPath}`);
+        publishedIndex.markPublished(
+            today,
+            sourceName === "hn" ? "hackernews" : "v2ex",
+            ranked.map((r) => r.item.id),
+        );
     }
+
+    await writeSourceOutputs("hn", `Hacker News 日报 ${today}`, hnRanked);
+    await writeSourceOutputs("v2ex", `V2EX 日报 ${today}`, v2exRanked);
 
     if (hnRanked.length === 0 && v2exRanked.length === 0) {
         console.log("⚠️  没有产出任何日报（所有 item 被过滤或 fetch 失败）");
@@ -245,7 +378,7 @@ async function fetchAll(config: AppConfig, opts: any) {
     const v2exItems: NewsItem[] = [];
 
     if (config.hackernews.enabled && !opts.v2exOnly) {
-        console.log(`🔶 Hacker News`);
+        console.log("🔶 Hacker News");
         for (const list of config.hackernews.lists) {
             process.stdout.write(`   Fetching ${list}...`);
             try {
@@ -253,7 +386,7 @@ async function fetchAll(config: AppConfig, opts: any) {
                 hnItems.push(...items);
                 console.log(` ${items.length} stories`);
             } catch (err) {
-                console.log(` ⚠️ failed:`, err instanceof Error ? err.message : err);
+                console.log(" ⚠️ failed:", err instanceof Error ? err.message : err);
             }
         }
     }
@@ -268,7 +401,7 @@ async function fetchAll(config: AppConfig, opts: any) {
                 v2exItems.push(...items);
                 console.log(` ${items.length} topics`);
             } catch (err) {
-                console.log(` ⚠️ failed:`, err instanceof Error ? err.message : err);
+                console.log(" ⚠️ failed:", err instanceof Error ? err.message : err);
             }
         }
     }

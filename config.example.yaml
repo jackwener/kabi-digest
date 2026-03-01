@@ -1,7 +1,9 @@
 # kabi-reader 配置
 # 注释掉的选项均有默认值，无需配置即可使用。取消注释可覆盖默认值。
 
-# AI 配置（可选，不配则跳过 AI 总结）
+# AI 配置
+# - `generate-ai` / `generate --profile ai_digest` 必须配置 api_key
+# - `generate-openclaw` / `generate --profile openclaw` 不使用 AI，可留空
 ai:
   api_key: ""               # 或设置环境变量 OPENAI_API_KEY
   model: "gpt-4o-mini"
@@ -24,11 +26,11 @@ v2ex:
   top_n: 20
   # pages: 3                # 每个节点抓取的页数（仅 v2 API 节点生效）
 
-# skip_hours: 72            # 跳过最近 N 小时已见过的 item
+# skip_hours: 72            # 跳过最近 N 小时已发布过的 item（按 source+id）
 
-# 正文抓取（通过 Jina AI Reader 获取文章正文给 AI 总结）
+# 正文抓取（在 generate 阶段补齐 HN 外链正文；两种模式都需要）
 # extractor:
-#   enabled: true             # 设为 false 可关闭正文抓取
+#   enabled: true             # 必须为 true
 #   concurrency: 3            # 并发数
-#   max_length: 5000          # 抓取正文最大字符数
+#   max_length: 20000         # 抓取正文最大字符数
 #   timeout: 15000            # 单次请求超时（ms）

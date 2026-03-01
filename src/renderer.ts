@@ -1,10 +1,11 @@
-import type { SummarizedItem } from "./types";
+import type { OutputItem, OutputProfile } from "./types";
 
 interface RenderData {
     title: string;
     date: string;
     summary: string;
-    items: SummarizedItem[];
+    items: OutputItem[];
+    profile: OutputProfile;
 }
 
 function escapeYaml(s: string): string {
@@ -18,6 +19,7 @@ export function renderMarkdown(data: RenderData): string {
     lines.push("---");
     lines.push(`title: "${escapeYaml(data.title)}"`);
     lines.push(`date: ${data.date}`);
+    lines.push(`profile: ${data.profile}`);
     if (data.summary) {
         const short = data.summary.slice(0, 100).split("\n")[0] ?? "";
         lines.push(`summary: "${escapeYaml(short)}..."`);
@@ -32,12 +34,13 @@ export function renderMarkdown(data: RenderData): string {
     }
 
     // Items
-    for (const { item, description } of data.items) {
+    for (const { item, digest, context } of data.items) {
         lines.push(`## [${item.title}](${item.url})`);
         lines.push("");
 
-        if (description) {
-            lines.push(description);
+        const body = data.profile === "human_digest" ? digest : context;
+        if (body) {
+            lines.push(body);
             lines.push("");
         }
 

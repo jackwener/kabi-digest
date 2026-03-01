@@ -2,14 +2,17 @@
 
 > V2EX + Hacker News 聚合日报生成器
 
-自动抓取热门内容，时间衰减评分排序，可选 AI 总结，输出 Markdown 日报。无需 AI API Key 也能输出带正文摘要的高信息密度日报。
+自动抓取热门内容，时间衰减评分排序，支持两种运行模式：
+- `ai_digest`：强制 AI 总结，输出给人读的日报
+- `openclaw`：无 AI，直接输出 top_n JSON 给 OpenClaw
 
 ## 快速开始
 
 ```bash
 bun install
-cp config.example.yaml config.yaml   # 编辑填写 AI key（可选）
-bun run generate --no-ai             # 先跑一次看看效果
+cp config.example.yaml config.yaml
+bun run collect
+bun run generate:ai
 ```
 
 ## OpenClaw 自动化
@@ -24,19 +27,21 @@ bun run collect               # 采集 V2EX + HN 数据
 bun run collect --hn-only     # 仅采集 HN
 bun run collect --v2ex-only   # 仅采集 V2EX
 
-# 生成模式（从累积池评分 + 正文抓取 + 可选 AI 总结）
-bun run generate              # 从累积池生成日报
-bun run generate --no-ai      # 跳过 AI 总结，输出正文 snippet
-bun run generate --hn-only    # 仅 HN
-bun run generate --v2ex-only  # 仅 V2EX
-bun run generate --top-n 5    # 覆盖 top-n 数量
+# 生成模式（明确区分两类用途）
+bun run generate:ai                 # AI 日报模式（必须有 AI key）
+bun run generate:openclaw           # OpenClaw 模式（不使用 AI）
+
+# 通用入口（显式指定 profile）
+bun run src/index.ts generate --profile ai_digest
+bun run src/index.ts generate --profile openclaw
 ```
 
-**推荐用法**：白天定时 `collect` 累积数据，晚上跑一次 `generate` 生成最终日报。
+**推荐用法**：白天定时 `collect` 累积数据，晚上按目标运行 `generate:ai` 或 `generate:openclaw`。
 
 ## 配置
 
-只需一个 `config.yaml`，所有选项都有默认值。最简只需填 `ai.api_key`。
+只需一个 `config.yaml`，所有选项都有默认值。  
+如果运行 `ai_digest`，必须配置 `ai.api_key`（或环境变量）；`openclaw` 可不配。
 
 详见 [config.example.yaml](config.example.yaml)。
 
@@ -62,7 +67,8 @@ ai:
   provider: "openai"                      # openai | anthropic
 ```
 
-不配置 `api_key` 则自动跳过 AI 总结，但仍会通过 Jina Reader 抓取正文并输出内容摘要 snippet。
+`ai_digest` 模式下不配置 `api_key` 会直接报错并退出。  
+`openclaw` 模式下不会调用 AI。
 
 ## 数据源
 
@@ -79,6 +85,7 @@ ai:
 - **API**: V1（免 token）+ V2（需 token）
 - `hot` / `latest` → V1 API，**无需 Token**
 - 具体节点（如 `claude`, `python`）→ V2 API，**需要 Token**，支持**多页抓取**（默认 3 页）
+- 采集阶段只抓 topic 基础信息；`generate` 阶段才补齐 replies / 正文内容
 - **Token 获取**: [V2EX 设置页](https://www.v2ex.com/settings/tokens) 创建 Personal Access Token
 - **Rate Limit**: 每 IP 每小时 **600 次** 请求
 - **默认节点**: `hot`
@@ -87,16 +94,18 @@ ai:
 
 ## 正文抓取
 
-对筛选后的 top-n 文章，自动通过 [Jina AI Reader](https://r.jina.ai/) 抓取原文正文（Markdown 格式）。**无论是否开启 AI**，都会执行正文抓取：
+两种模式都会在 `generate` 阶段对 top-n 补齐内容：
+- **HN**：通过 [Jina AI Reader](https://r.jina.ai/) 抓取外链全文
+- **V2EX**：补齐 replies（全楼层）+ supplements（附言）
 
-- **AI 模式**：基于完整文章内容生成高质量 AI 摘要
-- **非 AI 模式**：自动截取正文前 300 字符作为 snippet，输出带内容摘要的日报（无需任何 API Key）
+`ai_digest` 在此基础上做 AI 总结并输出 Markdown。  
+`openclaw` 在此基础上输出结构化 JSON（含完整 `content`）。
 
-特性：
+内容补齐特性：
 - 零配置、免费、无需 API key
 - 自动跳过 HN 讨论页和 V2EX 帖子（无需抓取外链）
 - 并发控制（默认 3），超时 graceful fallback
-- 可通过 `extractor.enabled: false` 关闭
+- `extractor.enabled` 必须为 `true`
 
 ## 评分算法
 
@@ -115,20 +124,33 @@ score = (engagement - 1) / (hours + 2) ^ 1.8
 ## 去重与累积
 
 - **数据累积**: 每次运行 `generate` 会将新抓取的数据与当天已有数据**按 ID 合并**（upsert），而非覆盖。多次运行会持续扩大候选池，item 的 replies/points 等数据自动更新为最新值。
-- **跨天去重**: 通过 `skip_hours`（默认 72h）实现——已在过去 N 小时内**其他天**输出过的 item ID 会被跳过，避免连续多天生成相同内容。
+- **发布去重**: 通过 `skip_hours`（默认 72h）+ `data/published/index.json` 实现——只要某条 item 在过去 N 小时内已经被发布过（按 source+id），下一次 `generate` 会跳过。
 
 ## 输出
 
 ```
 out/
-├── hn-2026-02-28.md      # HN 日报
-└── v2ex-2026-02-28.md    # V2EX 日报
+├── human_digest/
+│   ├── hn-2026-02-28.md                # 人读短摘要版
+│   └── v2ex-2026-02-28.md
+├── llm_context/
+│   ├── hn-2026-02-28.md                # LLM 长上下文版
+│   └── v2ex-2026-02-28.md
+└── openclaw/
+    ├── hn-2026-02-28.json              # OpenClaw 输入（top_n JSON）
+    └── v2ex-2026-02-28.json
 data/
-├── hackernews/           # HN 原始数据（用于去重）
-└── v2ex/                 # V2EX 原始数据
+├── hackernews/           # HN 原始采集池
+├── v2ex/                 # V2EX 原始采集池
+└── published/
+    └── index.json        # 已发布记录（去重依据）
 ```
 
-每篇日报包含 YAML frontmatter（`title`, `date`, `summary`），方便与 Hugo / Astro 等静态站点集成。
+输出策略按运行模式区分：
+- `ai_digest`：写入 `human_digest`（主输出）+ `llm_context`（上下文）
+- `openclaw`：仅写入 `openclaw/*.json`（包含 rank、score、`content` 和 `contentTruncated`，可直接喂给 OpenClaw）；即使没有条目也会输出空数组 JSON
+
+`ai_digest` 产出的 Markdown 日报包含 YAML frontmatter（`title`, `date`, `profile`, `summary`），方便与 Hugo / Astro 等静态站点集成。
 
 ## 项目结构
 

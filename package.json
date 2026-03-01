@@ -4,7 +4,9 @@
     "type": "module",
     "scripts": {
         "collect": "bun run src/index.ts collect",
-        "generate": "bun run src/index.ts generate",
+        "generate": "bun run src/index.ts generate --profile ai_digest",
+        "generate:openclaw": "bun run src/index.ts generate-openclaw",
+        "generate:ai": "bun run src/index.ts generate-ai",
         "help": "bun run src/index.ts --help"
     },
     "dependencies": {

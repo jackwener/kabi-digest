@@ -28,7 +28,7 @@ const DEFAULTS: AppConfig = {
     extractor: {
         enabled: true,
         concurrency: 3,
-        maxLength: 5000,
+        maxLength: 20000,
         timeout: 15000,
     },
 };
