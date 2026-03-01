@@ -2,7 +2,7 @@
 
 > V2EX + Hacker News 聚合日报生成器
 
-自动抓取热门内容，时间衰减评分排序，可选 AI 总结，输出 Markdown 日报。
+自动抓取热门内容，时间衰减评分排序，可选 AI 总结，输出 Markdown 日报。无需 AI API Key 也能输出带正文摘要的高信息密度日报。
 
 ## 快速开始
 
@@ -63,7 +63,7 @@ ai:
   provider: "openai"                      # openai | anthropic
 ```
 
-不配置 `api_key` 则自动跳过 AI 总结，仅输出标题和元数据。
+不配置 `api_key` 则自动跳过 AI 总结，但仍会通过 Jina Reader 抓取正文并输出内容摘要 snippet。
 
 ## 数据源
 
@@ -88,8 +88,12 @@ ai:
 
 ## 正文抓取
 
-对筛选后的 top-n 文章，自动通过 [Jina AI Reader](https://r.jina.ai/) 抓取原文正文（Markdown 格式），让 AI 基于**完整文章内容**生成高质量摘要，而非仅依赖标题。
+对筛选后的 top-n 文章，自动通过 [Jina AI Reader](https://r.jina.ai/) 抓取原文正文（Markdown 格式）。**无论是否开启 AI**，都会执行正文抓取：
 
+- **AI 模式**：基于完整文章内容生成高质量 AI 摘要
+- **非 AI 模式**：自动截取正文前 300 字符作为 snippet，输出带内容摘要的日报（无需任何 API Key）
+
+特性：
 - 零配置、免费、无需 API key
 - 自动跳过 HN 讨论页和 V2EX 帖子（无需抓取外链）
 - 并发控制（默认 3），超时 graceful fallback
