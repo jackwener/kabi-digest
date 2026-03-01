@@ -193,10 +193,9 @@ async function runGenerate(opts: any) {
             }
             overall = await summarizer.summarizeAll(ranked.map((r) => r.item));
         } else {
-            // No AI: use content snippet as description
+            // No AI: include full extracted content for downstream consumers (e.g. OpenClaw)
             for (const { item, score } of ranked) {
-                const snippet = generateSnippet(item.content);
-                items.push({ item, score, description: snippet });
+                items.push({ item, score, description: item.content || "" });
             }
         }
         return { items, overall };

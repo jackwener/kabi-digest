@@ -38,8 +38,13 @@ async function extractContent(
         });
         if (!resp.ok) return "";
         const text = await resp.text();
-        // Strip markdown title (Jina often prepends it)
-        const cleaned = text.replace(/^Title:.*\n/i, "").replace(/^URL Source:.*\n/i, "").replace(/^Markdown Content:\n/i, "").trim();
+        // Strip Jina Reader metadata lines
+        const cleaned = text
+            .replace(/^Title:.*\n?/gim, "")
+            .replace(/^URL Source:.*\n?/gim, "")
+            .replace(/^Published Time:.*\n?/gim, "")
+            .replace(/^Markdown Content:\n?/gim, "")
+            .trim();
         return cleaned.slice(0, maxLength);
     } catch {
         return "";
